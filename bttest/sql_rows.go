@@ -56,10 +56,13 @@ func (r *row) Bytes() ([]byte, error) {
 type ItemIterator = btree.ItemIterator
 type Item = btree.Item
 
-func (db *SqlRows) query(iterator ItemIterator, query string, args ...interface{}) {
+func (db *SqlRows) query(iterator ItemIterator, tx *sqlTx, query string, args ...interface{}) {
+
 	// db.mu.RLock()
 	// defer db.mu.RUnlock()
-	rows, err := db.db.Query(query, args...)
+	// stmt := db.getStatement(tx, query)
+
+	rows, err := tx.Query(query, args...)
 	if err == sql.ErrNoRows {
 		return
 	}
@@ -81,54 +84,66 @@ func (db *SqlRows) query(iterator ItemIterator, query string, args ...interface{
 	}
 }
 
-func (db *SqlRows) Ascend(iterator ItemIterator) {
-	db.query(iterator, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? ORDER BY row_key ASC", db.parent, db.tableId)
+func (db *SqlRows) Ascend(iterator ItemIterator, tx *sqlTx) {
+	db.query(iterator, tx, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? ORDER BY row_key ASC", db.parent, db.tableId)
 }
 
-func (db *SqlRows) AscendGreaterOrEqual(pivot Item, iterator ItemIterator) {
+func (db *SqlRows) AscendGreaterOrEqual(pivot Item, iterator ItemIterator, tx *sqlTx) {
 	row := pivot.(*row)
-	db.query(iterator, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? and row_key >= ? ORDER BY row_key ASC", db.parent, db.tableId, row.key)
+	db.query(iterator, tx, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? and row_key >= ? ORDER BY row_key ASC", db.parent, db.tableId, row.key)
 }
 
-func (db *SqlRows) AscendLessThan(pivot Item, iterator ItemIterator) {
+func (db *SqlRows) AscendLessThan(pivot Item, iterator ItemIterator, tx *sqlTx) {
 	row := pivot.(*row)
-	db.query(iterator, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? and row_key < ? ORDER BY row_key ASC", db.parent, db.tableId, row.key)
+	db.query(iterator, tx, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? and row_key < ? ORDER BY row_key ASC", db.parent, db.tableId, row.key)
 }
 
-func (db *SqlRows) AscendRange(greaterOrEqual, lessThan Item, iterator ItemIterator) {
+func (db *SqlRows) AscendRange(greaterOrEqual, lessThan Item, iterator ItemIterator, tx *sqlTx) {
 	ge := greaterOrEqual.(*row)
 	lt := lessThan.(*row)
-	db.query(iterator, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? and row_key >= ? and row_key < ? ORDER BY row_key ASC", db.parent, db.tableId, ge.key, lt.key)
+	db.query(iterator, tx, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? and row_key >= ? and row_key < ? ORDER BY row_key ASC", db.parent, db.tableId, ge.key, lt.key)
 }
 
-func (db *SqlRows) DeleteAll() {
+func (db *SqlRows) DeleteAll(tx *sqlTx) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.db.Exec("DELETE FROM rows_t WHERE parent = ? and table_id = ?", db.parent, db.tableId)
+
+	query := "DELETE FROM rows_t WHERE parent = ? and table_id = ?"
+	// stmt := db.getStatement(tx, query)
+	_, err := tx.Exec(query, db.parent, db.tableId)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 }
 
-func (db *SqlRows) Delete(item Item) {
+func (db *SqlRows) Delete(tx *sqlTx, item Item) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	row := item.(*row)
-	_, err := db.db.Exec("DELETE FROM rows_t WHERE parent = ? and table_id = ? and row_key = ?", db.parent, db.tableId, row.key)
+
+	query := "DELETE FROM rows_t WHERE parent = ? and table_id = ? and row_key = ?"
+	// stmt := db.getStatement(tx, query)
+	_, err := tx.Exec(query, db.parent, db.tableId, row.key)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func (db *SqlRows) Get(key Item) Item {
+func (db *SqlRows) Get(tx *sqlTx, key Item) Item {
 	row := key.(*row)
 	if row.families == nil {
 		row.families = make(map[string]*family)
 	}
 	// db.mu.RLock()
 	// defer db.mu.RUnlock()
-	err := db.db.QueryRow("SELECT families FROM rows_t WHERE parent = ? and table_id = ? and row_key = ?", db.parent, db.tableId, row.key).Scan(row)
+
+	query := "SELECT families FROM rows_t WHERE parent = ? and table_id = ? and row_key = ?"
+	// stmt := db.getStatement(tx, query)
+
+	// log.Println("retrieved stmt")
+
+	err := tx.QueryRow(query, db.parent, db.tableId, row.key).Scan(row)
 	if err == sql.ErrNoRows {
 		return row
 	}
@@ -138,18 +153,24 @@ func (db *SqlRows) Get(key Item) Item {
 	return row
 }
 
-func (db *SqlRows) Len() int {
+func (db *SqlRows) Len(tx *sqlTx) int {
 	var count int
 	// db.mu.RLock()
 	// defer db.mu.RUnlock()
-	err := db.db.QueryRow("SELECT count(*) FROM rows_t WHERE parent = ? and table_id = ?", db.parent, db.tableId).Scan(&count)
+
+	query := "SELECT count(*) FROM rows_t WHERE parent = ? and table_id = ?"
+	// stmt := db.getStatement(tx, query)
+
+	err := tx.QueryRow(query, db.parent, db.tableId).Scan(&count)
 	if err != nil {
 		log.Fatal(err)
 	}
 	return count
 }
 
-func (db *SqlRows) ReplaceOrInsert(item Item) Item {
+func (db *SqlRows) ReplaceOrInsert(tx *sqlTx, item Item) Item {
+	// log.Printf("executing ReplaceOrInsert")
+
 	row := item.(*row)
 	families, err := row.Bytes()
 	if err != nil {
@@ -158,9 +179,15 @@ func (db *SqlRows) ReplaceOrInsert(item Item) Item {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	_, err = db.db.Exec("INSERT INTO rows_t (parent, table_id, row_key, families) values (?, ?, ?, ?)", db.parent, db.tableId, row.key, families)
+	query := "INSERT INTO rows_t (parent, table_id, row_key, families) values (?, ?, ?, ?)"
+	// stmt := db.getStatement(tx, query)
+
+	_, err = tx.Exec(query, db.parent, db.tableId, row.key, families)
 	if e, ok := err.(sqlite3.Error); ok && e.Code == 19 {
-		_, err = db.db.Exec("UPDATE rows_t SET families = ? WHERE parent = ? AND table_id = ? AND row_key = ?", families, db.parent, db.tableId, row.key)
+		query := "UPDATE rows_t SET families = ? WHERE parent = ? AND table_id = ? AND row_key = ?"
+		// stmt := db.getStatement(tx, query)
+
+		_, err = tx.Exec(query, families, db.parent, db.tableId, row.key)
 	}
 	if err != nil {
 		log.Fatalf("row:%s err %s", row.key, err)

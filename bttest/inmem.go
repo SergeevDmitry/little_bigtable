@@ -217,8 +217,16 @@ func (s *server) DeleteTable(ctx context.Context, req *btapb.DeleteTableRequest)
 	if tbl, ok := s.tables[req.Name]; !ok {
 		return nil, status.Errorf(codes.NotFound, "table %q not found", req.Name)
 	} else {
+		tx := NewTx(tbl.rows.db)
+		defer func() {
+			err := tx.Commit()
+			if err != nil {
+				log.Fatalf("error during tx commit: %v", err)
+			}
+		}()
+
 		s.tableBackend.Delete(tbl)
-		tbl.rows.DeleteAll()
+		tbl.rows.DeleteAll(tx)
 		delete(s.tables, req.Name)
 	}
 	return &emptypb.Empty{}, nil
@@ -229,6 +237,9 @@ func (s *server) UndeleteTable(context.Context, *btapb.UndeleteTableRequest) (*l
 }
 
 func (s *server) ModifyColumnFamilies(ctx context.Context, req *btapb.ModifyColumnFamiliesRequest) (*btapb.Table, error) {
+
+	// log.Printf("executing ModifyColumnFamilies")
+
 	s.mu.Lock()
 	tbl, ok := s.tables[req.Name]
 	s.mu.Unlock()
@@ -280,6 +291,9 @@ func (s *server) ModifyColumnFamilies(ctx context.Context, req *btapb.ModifyColu
 }
 
 func (s *server) DropRowRange(ctx context.Context, req *btapb.DropRowRangeRequest) (*emptypb.Empty, error) {
+
+	// log.Printf("executing DropRowRange")
+
 	s.mu.Lock()
 	tbl, ok := s.tables[req.Name]
 	s.mu.Unlock()
@@ -289,8 +303,19 @@ func (s *server) DropRowRange(ctx context.Context, req *btapb.DropRowRangeReques
 
 	tbl.mu.Lock()
 	defer tbl.mu.Unlock()
+
+	tx := NewTx(tbl.rows.db)
+	defer func() {
+		err := tx.Commit()
+		if err != nil {
+			log.Fatalf("error during tx commit: %v", err)
+		}
+	}()
+
 	if req.GetDeleteAllDataFromTable() {
-		tbl.rows.DeleteAll()
+
+		tbl.rows.DeleteAll(tx)
+
 	} else {
 		// Delete rows by prefix.
 		prefixBytes := req.GetRowKeyPrefix()
@@ -310,9 +335,10 @@ func (s *server) DropRowRange(ctx context.Context, req *btapb.DropRowRangeReques
 				return true
 			}
 			return false // stop iteration
-		})
+		}, tx)
+
 		for _, r := range rowsToDelete {
-			tbl.rows.Delete(r)
+			tbl.rows.Delete(tx, r)
 		}
 	}
 	return &emptypb.Empty{}, nil
@@ -389,6 +415,9 @@ func (s *server) RestoreTable(context.Context, *btapb.RestoreTableRequest) (*lon
 }
 
 func (s *server) ReadRows(req *btpb.ReadRowsRequest, stream btpb.Bigtable_ReadRowsServer) error {
+
+	// log.Printf("executing ReadRows")
+
 	s.mu.Lock()
 	tbl, ok := s.tables[req.TableName]
 	s.mu.Unlock()
@@ -415,12 +444,20 @@ func (s *server) ReadRows(req *btpb.ReadRowsRequest, stream btpb.Bigtable_ReadRo
 		return true
 	}
 
+	tx := NewTx(tbl.rows.db)
+	defer func() {
+		err := tx.Commit()
+		if err != nil {
+			log.Fatalf("error during tx commit: %v", err)
+		}
+	}()
+
 	if req.Rows != nil &&
 		len(req.Rows.RowKeys)+len(req.Rows.RowRanges) > 0 {
 		// Add the explicitly given keys
 		for _, key := range req.Rows.RowKeys {
 			k := string(key)
-			if i := tbl.rows.Get(btreeKey(k)); i != nil {
+			if i := tbl.rows.Get(tx, btreeKey(k)); i != nil {
 				addRow(i)
 			}
 		}
@@ -442,18 +479,18 @@ func (s *server) ReadRows(req *btpb.ReadRowsRequest, stream btpb.Bigtable_ReadRo
 			}
 			switch {
 			case start == "" && end == "":
-				tbl.rows.Ascend(addRow) // all rows
+				tbl.rows.Ascend(addRow, tx) // all rows
 			case start == "":
-				tbl.rows.AscendLessThan(btreeKey(end), addRow)
+				tbl.rows.AscendLessThan(btreeKey(end), addRow, tx)
 			case end == "":
-				tbl.rows.AscendGreaterOrEqual(btreeKey(start), addRow)
+				tbl.rows.AscendGreaterOrEqual(btreeKey(start), addRow, tx)
 			default:
-				tbl.rows.AscendRange(btreeKey(start), btreeKey(end), addRow)
+				tbl.rows.AscendRange(btreeKey(start), btreeKey(end), addRow, tx)
 			}
 		}
 	} else {
 		// Read all rows
-		tbl.rows.Ascend(addRow)
+		tbl.rows.Ascend(addRow, tx)
 	}
 	gcRules := tbl.gcRules()
 	tbl.mu.RUnlock()
@@ -471,9 +508,9 @@ func (s *server) ReadRows(req *btpb.ReadRowsRequest, stream btpb.Bigtable_ReadRo
 		}
 		if changed {
 			if len(r.families) > 0 {
-				tbl.rows.ReplaceOrInsert(r)
+				tbl.rows.ReplaceOrInsert(tx, r)
 			} else {
-				tbl.rows.Delete(r)
+				tbl.rows.Delete(tx, r)
 			}
 		}
 		fams := len(r.families)
@@ -870,6 +907,8 @@ func newRegexp(pat []byte) (*binaryregexp.Regexp, error) {
 }
 
 func (s *server) MutateRow(ctx context.Context, req *btpb.MutateRowRequest) (*btpb.MutateRowResponse, error) {
+	// log.Printf("executing MutateRow")
+
 	if len(req.Mutations) == 0 {
 		return nil, status.Errorf(
 			codes.InvalidArgument,
@@ -882,8 +921,17 @@ func (s *server) MutateRow(ctx context.Context, req *btpb.MutateRowRequest) (*bt
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "table %q not found", req.TableName)
 	}
+
+	tx := NewTx(tbl.rows.db)
+	defer func() {
+		err := tx.Commit()
+		if err != nil {
+			log.Fatalf("error during tx commit: %v", err)
+		}
+	}()
+
 	fs := tbl.columnFamilies()
-	r := tbl.mutableRow(string(req.RowKey))
+	r := tbl.mutableRow(tx, string(req.RowKey))
 	if err := applyMutations(tbl, r, req.Mutations, fs); err != nil {
 		return nil, err
 	}
@@ -896,11 +944,14 @@ func (s *server) MutateRow(ctx context.Context, req *btpb.MutateRowRequest) (*bt
 		}
 	}
 
-	tbl.rows.ReplaceOrInsert(r)
+	tbl.rows.ReplaceOrInsert(tx, r)
+
 	return &btpb.MutateRowResponse{}, nil
 }
 
 func (s *server) MutateRows(req *btpb.MutateRowsRequest, stream btpb.Bigtable_MutateRowsServer) error {
+	//log.Printf("executing MutateRows")
+
 	nMutations := 0
 	for _, entry := range req.Entries {
 		nMutations += len(entry.Mutations)
@@ -921,8 +972,17 @@ func (s *server) MutateRows(req *btpb.MutateRowsRequest, stream btpb.Bigtable_Mu
 
 	cfs := tbl.columnFamilies()
 
+	tx := NewTx(tbl.rows.db)
+	defer func() {
+		err := tx.Commit()
+		if err != nil {
+			log.Fatalf("error during tx commit: %v", err)
+		}
+	}()
+
 	for i, entry := range req.Entries {
-		r := tbl.mutableRow(string(entry.RowKey))
+		r := tbl.mutableRow(tx, string(entry.RowKey))
+
 		code, msg := int32(codes.OK), ""
 		if err := applyMutations(tbl, r, entry.Mutations, cfs); err != nil {
 			code = int32(codes.Internal)
@@ -934,17 +994,20 @@ func (s *server) MutateRows(req *btpb.MutateRowsRequest, stream btpb.Bigtable_Mu
 		}
 		r.gc(tbl.gcRules())
 		// JIT family deletion; could be skipped if mutableRow doesn't return an existing row
-		for f, _ := range r.families {
+		for f := range r.families {
 			if _, ok := cfs[f]; !ok {
 				delete(r.families, f)
 			}
 		}
-		tbl.rows.ReplaceOrInsert(r)
+		tbl.rows.ReplaceOrInsert(tx, r)
 	}
+
 	return stream.Send(res)
 }
 
 func (s *server) CheckAndMutateRow(ctx context.Context, req *btpb.CheckAndMutateRowRequest) (*btpb.CheckAndMutateRowResponse, error) {
+	// log.Printf("executing CheckAndMutateRow")
+
 	s.mu.Lock()
 	tbl, ok := s.tables[req.TableName]
 	s.mu.Unlock()
@@ -955,7 +1018,15 @@ func (s *server) CheckAndMutateRow(ctx context.Context, req *btpb.CheckAndMutate
 
 	cfs := tbl.columnFamilies()
 
-	r := tbl.mutableRow(string(req.RowKey))
+	tx := NewTx(tbl.rows.db)
+	defer func() {
+		err := tx.Commit()
+		if err != nil {
+			log.Fatalf("error during tx commit: %v", err)
+		}
+	}()
+
+	r := tbl.mutableRow(tx, string(req.RowKey))
 
 	// Figure out which mutation to apply.
 	whichMut := false
@@ -989,7 +1060,9 @@ func (s *server) CheckAndMutateRow(ctx context.Context, req *btpb.CheckAndMutate
 			delete(r.families, f)
 		}
 	}
-	tbl.rows.ReplaceOrInsert(r)
+
+	tbl.rows.ReplaceOrInsert(tx, r)
+
 	return res, nil
 }
 
@@ -1111,6 +1184,7 @@ func appendOrReplaceCell(cs []cell, newCell cell) []cell {
 }
 
 func (s *server) ReadModifyWriteRow(ctx context.Context, req *btpb.ReadModifyWriteRowRequest) (*btpb.ReadModifyWriteRowResponse, error) {
+	// log.Printf("executing ReadModifyWriteRow")
 	s.mu.Lock()
 	tbl, ok := s.tables[req.TableName]
 	s.mu.Unlock()
@@ -1118,10 +1192,18 @@ func (s *server) ReadModifyWriteRow(ctx context.Context, req *btpb.ReadModifyWri
 		return nil, status.Errorf(codes.NotFound, "table %q not found", req.TableName)
 	}
 
+	tx := NewTx(tbl.rows.db)
+	defer func() {
+		err := tx.Commit()
+		if err != nil {
+			log.Fatalf("error during tx commit: %v", err)
+		}
+	}()
+
 	cfs := tbl.columnFamilies()
 
 	rowKey := string(req.RowKey)
-	r := tbl.mutableRow(rowKey)
+	r := tbl.mutableRow(tx, rowKey)
 	resultRow := newRow(rowKey) // copy of updated cells
 
 	// Assume all mutations apply to the most recent version of the cell.
@@ -1179,12 +1261,13 @@ func (s *server) ReadModifyWriteRow(ctx context.Context, req *btpb.ReadModifyWri
 	}
 	r.gc(tbl.gcRules())
 	// JIT family deletion; could be skipped if mutableRow doesn't return an existing row
-	for f, _ := range r.families {
+	for f := range r.families {
 		if _, ok := cfs[f]; !ok {
 			delete(r.families, f)
 		}
 	}
-	tbl.rows.ReplaceOrInsert(r)
+
+	tbl.rows.ReplaceOrInsert(tx, r)
 
 	// Build the response using the result row
 	res := &btpb.Row{
@@ -1213,6 +1296,8 @@ func (s *server) ReadModifyWriteRow(ctx context.Context, req *btpb.ReadModifyWri
 }
 
 func (s *server) SampleRowKeys(req *btpb.SampleRowKeysRequest, stream btpb.Bigtable_SampleRowKeysServer) error {
+	// log.Printf("executing SampleRowKeys")
+
 	s.mu.Lock()
 	tbl, ok := s.tables[req.TableName]
 	s.mu.Unlock()
@@ -1229,7 +1314,15 @@ func (s *server) SampleRowKeys(req *btpb.SampleRowKeysRequest, stream btpb.Bigta
 	var err error
 	i := 0
 
-	len := tbl.rows.Len()
+	tx := NewTx(tbl.rows.db)
+	defer func() {
+		err := tx.Commit()
+		if err != nil {
+			log.Fatalf("error during tx commit: %v", err)
+		}
+	}()
+
+	len := tbl.rows.Len(tx)
 	tbl.rows.Ascend(func(it btree.Item) bool {
 		row := it.(*row)
 		if rand.Int31n(100) == 0 || i == len-1 {
@@ -1245,7 +1338,8 @@ func (s *server) SampleRowKeys(req *btpb.SampleRowKeysRequest, stream btpb.Bigta
 		offset += int64(row.size())
 		i++
 		return true
-	})
+	}, tx)
+
 	return err
 }
 
@@ -1301,11 +1395,11 @@ func (t *table) columnFamilies() map[string]*columnFamily {
 	return cp
 }
 
-func (t *table) mutableRow(key string) *row {
+func (t *table) mutableRow(tx *sqlTx, key string) *row {
 	bkey := btreeKey(key)
 
 	// Try fast path first.
-	i := t.rows.Get(bkey)
+	i := t.rows.Get(tx, bkey)
 	if i != nil {
 		return i.(*row)
 	}

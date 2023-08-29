@@ -534,7 +534,16 @@ func TestDropRowRange(t *testing.T) {
 	}
 
 	doWrite()
-	tblSize := tbl.rows.Len()
+
+	tx := NewTx(tbl.rows.db)
+	defer func() {
+		err = tx.Commit()
+		if err != nil {
+			log.Fatalf("error during tx commit: %v", err)
+		}
+	}()
+
+	tblSize := tbl.rows.Len(tx)
 	req := &btapb.DropRowRangeRequest{
 		Name:   tblInfo.Name,
 		Target: &btapb.DropRowRangeRequest_RowKeyPrefix{RowKeyPrefix: []byte("AAA")},
@@ -542,7 +551,7 @@ func TestDropRowRange(t *testing.T) {
 	if _, err = s.DropRowRange(ctx, req); err != nil {
 		t.Fatalf("Dropping first range: %v", err)
 	}
-	got, want := tbl.rows.Len(), tblSize-count
+	got, want := tbl.rows.Len(tx), tblSize-count
 	if got != want {
 		t.Errorf("Row count after first drop: got %d (%v), want %d", got, tbl.rows, want)
 	}
@@ -554,7 +563,7 @@ func TestDropRowRange(t *testing.T) {
 	if _, err = s.DropRowRange(ctx, req); err != nil {
 		t.Fatalf("Dropping second range: %v", err)
 	}
-	got, want = tbl.rows.Len(), tblSize-(2*count)
+	got, want = tbl.rows.Len(tx), tblSize-(2*count)
 	if got != want {
 		t.Errorf("Row count after second drop: got %d (%v), want %d", got, tbl.rows, want)
 	}
@@ -566,7 +575,7 @@ func TestDropRowRange(t *testing.T) {
 	if _, err = s.DropRowRange(ctx, req); err != nil {
 		t.Fatalf("Dropping invalid range: %v", err)
 	}
-	got, want = tbl.rows.Len(), tblSize-(2*count)
+	got, want = tbl.rows.Len(tx), tblSize-(2*count)
 	if got != want {
 		t.Errorf("Row count after invalid drop: got %d (%v), want %d", got, tbl.rows, want)
 	}
@@ -578,7 +587,7 @@ func TestDropRowRange(t *testing.T) {
 	if _, err = s.DropRowRange(ctx, req); err != nil {
 		t.Fatalf("Dropping all data: %v", err)
 	}
-	got, want = tbl.rows.Len(), 0
+	got, want = tbl.rows.Len(tx), 0
 	if got != want {
 		t.Errorf("Row count after drop all: got %d, want %d", got, want)
 	}
@@ -594,13 +603,13 @@ func TestDropRowRange(t *testing.T) {
 	if _, err = s.DropRowRange(ctx, req); err != nil {
 		t.Fatalf("Dropping all data: %v", err)
 	}
-	got, want = tbl.rows.Len(), 0
+	got, want = tbl.rows.Len(tx), 0
 	if got != want {
 		t.Errorf("Row count after drop all: got %d, want %d", got, want)
 	}
 
 	doWrite()
-	got, want = tbl.rows.Len(), len(prefixes)
+	got, want = tbl.rows.Len(tx), len(prefixes)
 	if got != want {
 		t.Errorf("Row count after rewrite: got %d, want %d", got, want)
 	}
@@ -613,7 +622,7 @@ func TestDropRowRange(t *testing.T) {
 		t.Fatalf("Dropping range: %v", err)
 	}
 	doWrite()
-	got, want = tbl.rows.Len(), len(prefixes)
+	got, want = tbl.rows.Len(tx), len(prefixes)
 	if got != want {
 		t.Errorf("Row count after drop range: got %d, want %d", got, want)
 	}
