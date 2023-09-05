@@ -145,12 +145,12 @@ func (s *Server) Close() {
 func (s *server) LoadTables() {
 	tables := s.tableBackend.GetAll()
 	for _, t := range tables {
-		s.tables[t.parent+"/tables/"+t.tableId] = t
+		s.tables[t.tableId] = t
 	}
 }
 
 func (s *server) CreateTable(ctx context.Context, req *btapb.CreateTableRequest) (*btapb.Table, error) {
-	tbl := req.Parent + "/tables/" + req.TableId
+	tbl := req.TableId
 
 	s.mu.Lock()
 	if _, ok := s.tables[tbl]; ok {
@@ -178,13 +178,10 @@ func (s *server) CreateTableFromSnapshot(context.Context, *btapb.CreateTableFrom
 
 func (s *server) ListTables(ctx context.Context, req *btapb.ListTablesRequest) (*btapb.ListTablesResponse, error) {
 	res := &btapb.ListTablesResponse{}
-	prefix := req.Parent + "/tables/"
 
 	s.mu.Lock()
 	for tbl := range s.tables {
-		if strings.HasPrefix(tbl, prefix) {
-			res.Tables = append(res.Tables, &btapb.Table{Name: tbl})
-		}
+		res.Tables = append(res.Tables, &btapb.Table{Name: tbl})
 	}
 	s.mu.Unlock()
 
@@ -192,6 +189,9 @@ func (s *server) ListTables(ctx context.Context, req *btapb.ListTablesRequest) (
 }
 
 func (s *server) GetTable(ctx context.Context, req *btapb.GetTableRequest) (*btapb.Table, error) {
+	name := strings.Split(req.Name, "/")
+	req.Name = name[len(name)-1]
+
 	tbl := req.Name
 
 	s.mu.Lock()
@@ -212,6 +212,9 @@ func (s *server) UpdateTable(context.Context, *btapb.UpdateTableRequest) (*longr
 }
 
 func (s *server) DeleteTable(ctx context.Context, req *btapb.DeleteTableRequest) (*emptypb.Empty, error) {
+	name := strings.Split(req.Name, "/")
+	req.Name = name[len(name)-1]
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if tbl, ok := s.tables[req.Name]; !ok {
@@ -239,6 +242,9 @@ func (s *server) UndeleteTable(context.Context, *btapb.UndeleteTableRequest) (*l
 func (s *server) ModifyColumnFamilies(ctx context.Context, req *btapb.ModifyColumnFamiliesRequest) (*btapb.Table, error) {
 
 	// log.Printf("executing ModifyColumnFamilies")
+
+	name := strings.Split(req.Name, "/")
+	req.Name = name[len(name)-1]
 
 	s.mu.Lock()
 	tbl, ok := s.tables[req.Name]
@@ -294,6 +300,9 @@ func (s *server) DropRowRange(ctx context.Context, req *btapb.DropRowRangeReques
 
 	// log.Printf("executing DropRowRange")
 
+	name := strings.Split(req.Name, "/")
+	req.Name = name[len(name)-1]
+
 	s.mu.Lock()
 	tbl, ok := s.tables[req.Name]
 	s.mu.Unlock()
@@ -346,6 +355,9 @@ func (s *server) DropRowRange(ctx context.Context, req *btapb.DropRowRangeReques
 
 func (s *server) GenerateConsistencyToken(ctx context.Context, req *btapb.GenerateConsistencyTokenRequest) (*btapb.GenerateConsistencyTokenResponse, error) {
 	// Check that the table exists.
+	name := strings.Split(req.Name, "/")
+	req.Name = name[len(name)-1]
+
 	_, ok := s.tables[req.Name]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "table %q not found", req.Name)
@@ -358,6 +370,8 @@ func (s *server) GenerateConsistencyToken(ctx context.Context, req *btapb.Genera
 
 func (s *server) CheckConsistency(ctx context.Context, req *btapb.CheckConsistencyRequest) (*btapb.CheckConsistencyResponse, error) {
 	// Check that the table exists.
+	name := strings.Split(req.Name, "/")
+	req.Name = name[len(name)-1]
 	_, ok := s.tables[req.Name]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "table %q not found", req.Name)
@@ -417,6 +431,8 @@ func (s *server) RestoreTable(context.Context, *btapb.RestoreTableRequest) (*lon
 func (s *server) ReadRows(req *btpb.ReadRowsRequest, stream btpb.Bigtable_ReadRowsServer) error {
 
 	// log.Printf("executing ReadRows")
+	name := strings.Split(req.TableName, "/")
+	req.TableName = name[len(name)-1]
 
 	s.mu.Lock()
 	tbl, ok := s.tables[req.TableName]
@@ -908,6 +924,8 @@ func newRegexp(pat []byte) (*binaryregexp.Regexp, error) {
 
 func (s *server) MutateRow(ctx context.Context, req *btpb.MutateRowRequest) (*btpb.MutateRowResponse, error) {
 	// log.Printf("executing MutateRow")
+	name := strings.Split(req.TableName, "/")
+	req.TableName = name[len(name)-1]
 
 	if len(req.Mutations) == 0 {
 		return nil, status.Errorf(
@@ -951,6 +969,8 @@ func (s *server) MutateRow(ctx context.Context, req *btpb.MutateRowRequest) (*bt
 
 func (s *server) MutateRows(req *btpb.MutateRowsRequest, stream btpb.Bigtable_MutateRowsServer) error {
 	//log.Printf("executing MutateRows")
+	name := strings.Split(req.TableName, "/")
+	req.TableName = name[len(name)-1]
 
 	nMutations := 0
 	for _, entry := range req.Entries {
@@ -1007,6 +1027,8 @@ func (s *server) MutateRows(req *btpb.MutateRowsRequest, stream btpb.Bigtable_Mu
 
 func (s *server) CheckAndMutateRow(ctx context.Context, req *btpb.CheckAndMutateRowRequest) (*btpb.CheckAndMutateRowResponse, error) {
 	// log.Printf("executing CheckAndMutateRow")
+	name := strings.Split(req.TableName, "/")
+	req.TableName = name[len(name)-1]
 
 	s.mu.Lock()
 	tbl, ok := s.tables[req.TableName]
@@ -1184,6 +1206,8 @@ func appendOrReplaceCell(cs []cell, newCell cell) []cell {
 }
 
 func (s *server) ReadModifyWriteRow(ctx context.Context, req *btpb.ReadModifyWriteRowRequest) (*btpb.ReadModifyWriteRowResponse, error) {
+	name := strings.Split(req.TableName, "/")
+	req.TableName = name[len(name)-1]
 	// log.Printf("executing ReadModifyWriteRow")
 	s.mu.Lock()
 	tbl, ok := s.tables[req.TableName]
@@ -1297,6 +1321,8 @@ func (s *server) ReadModifyWriteRow(ctx context.Context, req *btpb.ReadModifyWri
 
 func (s *server) SampleRowKeys(req *btpb.SampleRowKeysRequest, stream btpb.Bigtable_SampleRowKeysServer) error {
 	// log.Printf("executing SampleRowKeys")
+	name := strings.Split(req.TableName, "/")
+	req.TableName = name[len(name)-1]
 
 	s.mu.Lock()
 	tbl, ok := s.tables[req.TableName]
@@ -1344,7 +1370,6 @@ func (s *server) SampleRowKeys(req *btpb.SampleRowKeysRequest, stream btpb.Bigta
 }
 
 type table struct {
-	parent   string
 	tableId  string
 	mu       sync.RWMutex
 	counter  uint64                   // increment by 1 when a new family is created
@@ -1360,7 +1385,7 @@ func newTable(ctr *btapb.CreateTableRequest, db *sql.DB) *table {
 	if ctr.Table != nil {
 		for id, cf := range ctr.Table.ColumnFamilies {
 			fams[id] = &columnFamily{
-				Name:   ctr.Parent + "/columnFamilies/" + id,
+				Name:   id,
 				Order:  c,
 				GCRule: cf.GcRule,
 			}
@@ -1368,11 +1393,10 @@ func newTable(ctr *btapb.CreateTableRequest, db *sql.DB) *table {
 		}
 	}
 	return &table{
-		parent:   ctr.Parent,
 		tableId:  ctr.TableId,
 		families: fams,
 		counter:  c,
-		rows:     NewSqlRows(db, ctr.Parent, ctr.TableId),
+		rows:     NewSqlRows(db, ctr.TableId),
 	}
 }
 

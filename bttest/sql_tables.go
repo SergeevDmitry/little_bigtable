@@ -51,13 +51,12 @@ func (t *table) Bytes() ([]byte, error) {
 	return b.Bytes(), err
 }
 
-func (db *SqlTables) Get(parent, tableId string) *table {
+func (db *SqlTables) Get(tableId string) *table {
 	tbl := &table{
-		parent:  parent,
 		tableId: tableId,
-		rows:    NewSqlRows(db.db, parent, tableId),
+		rows:    NewSqlRows(db.db, tableId),
 	}
-	err := db.db.QueryRow("SELECT metadata FROM tables_t WHERE parent = ? AND table_id = ?", parent, tableId).Scan(tbl)
+	err := db.db.QueryRow("SELECT metadata FROM tables_t WHERE table_id = ?", tableId).Scan(tbl)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -67,7 +66,7 @@ func (db *SqlTables) Get(parent, tableId string) *table {
 func (db *SqlTables) GetAll() []*table {
 	var tables []*table
 
-	rows, err := db.db.Query("SELECT parent, table_id, metadata FROM tables_t")
+	rows, err := db.db.Query("SELECT table_id, metadata FROM tables_t")
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -77,10 +76,10 @@ func (db *SqlTables) GetAll() []*table {
 	defer rows.Close()
 	for rows.Next() {
 		t := table{}
-		if err := rows.Scan(&t.parent, &t.tableId, &t); err != nil {
+		if err := rows.Scan(&t.tableId, &t); err != nil {
 			log.Fatal(err)
 		}
-		t.rows = NewSqlRows(db.db, t.parent, t.tableId)
+		t.rows = NewSqlRows(db.db, t.tableId)
 		tables = append(tables, &t)
 	}
 	if err := rows.Err(); err != nil {
@@ -94,17 +93,35 @@ func (db *SqlTables) Save(t *table) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	_, err = db.db.Exec("INSERT INTO tables_t (parent, table_id, metadata) VALUES (?, ?, ?)", t.parent, t.tableId, metadata)
+	_, err = db.db.Exec("INSERT INTO tables_t (table_id, metadata) VALUES (?, ?)", t.tableId, metadata)
 	if e, ok := err.(sqlite3.Error); ok && e.Code == 19 {
-		_, err = db.db.Exec("UPDATE tables_t SET metadata = ? WHERE parent = ? AND table_id = ?", metadata, t.parent, t.tableId)
+		_, err = db.db.Exec("UPDATE tables_t SET metadata = ? WHERE table_id = ?", metadata, t.tableId)
 	}
+	if err != nil {
+		log.Fatalf("%#v", err)
+	}
+
+	query := "CREATE TABLE IF NOT EXISTS " + t.tableId + " ( \n" +
+		"`row_key` TEXT NOT NULL,\n" +
+		"`families` BLOB NOT NULL,\n" +
+		"PRIMARY KEY (`row_key`)\n" +
+		") WITHOUT ROWID"
+	// this table could be WITHOUT ROWID but that is only supported in sqllite 3.8.2+
+	// https://www.sqlite.org/releaselog/3_8_2.html
+	log.Print(query)
+	_, err = db.db.Exec(query)
 	if err != nil {
 		log.Fatalf("%#v", err)
 	}
 }
 
 func (db *SqlTables) Delete(t *table) {
-	_, err := db.db.Exec("DELETE FROM tables_t WHERE parent = ? AND table_id = ? ", t.parent, t.tableId)
+	_, err := db.db.Exec("DELETE FROM tables_t WHERE table_id = ? ", t.tableId)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = db.db.Exec("DROP TABLE ?", t.tableId)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -17,16 +17,14 @@ import (
 //
 // rows are persisted in rows_t
 type SqlRows struct {
-	parent  string // Values are of the form `projects/{project}/instances/{instance}`.
-	tableId string // The name by which the new table should be referred to within the parent instance
+	tableId string // The name by which the new table should be referred to within the instance
 
 	mu sync.RWMutex
 	db *sql.DB
 }
 
-func NewSqlRows(db *sql.DB, parent, tableId string) *SqlRows {
+func NewSqlRows(db *sql.DB, tableId string) *SqlRows {
 	return &SqlRows{
-		parent:  parent,
 		tableId: tableId,
 		db:      db,
 	}
@@ -85,32 +83,32 @@ func (db *SqlRows) query(iterator ItemIterator, tx *sqlTx, query string, args ..
 }
 
 func (db *SqlRows) Ascend(iterator ItemIterator, tx *sqlTx) {
-	db.query(iterator, tx, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? ORDER BY row_key ASC", db.parent, db.tableId)
+	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" ORDER BY row_key ASC")
 }
 
 func (db *SqlRows) AscendGreaterOrEqual(pivot Item, iterator ItemIterator, tx *sqlTx) {
 	row := pivot.(*row)
-	db.query(iterator, tx, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? and row_key >= ? ORDER BY row_key ASC", db.parent, db.tableId, row.key)
+	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" WHERE row_key >= ? ORDER BY row_key ASC", row.key)
 }
 
 func (db *SqlRows) AscendLessThan(pivot Item, iterator ItemIterator, tx *sqlTx) {
 	row := pivot.(*row)
-	db.query(iterator, tx, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? and row_key < ? ORDER BY row_key ASC", db.parent, db.tableId, row.key)
+	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" WHERE row_key < ? ORDER BY row_key ASC", row.key)
 }
 
 func (db *SqlRows) AscendRange(greaterOrEqual, lessThan Item, iterator ItemIterator, tx *sqlTx) {
 	ge := greaterOrEqual.(*row)
 	lt := lessThan.(*row)
-	db.query(iterator, tx, "SELECT row_key, families FROM rows_t WHERE parent = ? and table_id = ? and row_key >= ? and row_key < ? ORDER BY row_key ASC", db.parent, db.tableId, ge.key, lt.key)
+	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" WHERE row_key >= ? and row_key < ? ORDER BY row_key ASC", ge.key, lt.key)
 }
 
 func (db *SqlRows) DeleteAll(tx *sqlTx) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	query := "DELETE FROM rows_t WHERE parent = ? and table_id = ?"
+	query := "DELETE FROM " + db.GetTableName()
 	// stmt := db.getStatement(tx, query)
-	_, err := tx.Exec(query, db.parent, db.tableId)
+	_, err := tx.Exec(query)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -122,9 +120,9 @@ func (db *SqlRows) Delete(tx *sqlTx, item Item) {
 	defer db.mu.Unlock()
 	row := item.(*row)
 
-	query := "DELETE FROM rows_t WHERE parent = ? and table_id = ? and row_key = ?"
+	query := "DELETE FROM " + db.GetTableName() + " WHERE row_key = ?"
 	// stmt := db.getStatement(tx, query)
-	_, err := tx.Exec(query, db.parent, db.tableId, row.key)
+	_, err := tx.Exec(query, row.key)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -138,12 +136,12 @@ func (db *SqlRows) Get(tx *sqlTx, key Item) Item {
 	// db.mu.RLock()
 	// defer db.mu.RUnlock()
 
-	query := "SELECT families FROM rows_t WHERE parent = ? and table_id = ? and row_key = ?"
+	query := "SELECT families FROM " + db.GetTableName() + " WHERE row_key = ?"
 	// stmt := db.getStatement(tx, query)
 
 	// log.Println("retrieved stmt")
 
-	err := tx.QueryRow(query, db.parent, db.tableId, row.key).Scan(row)
+	err := tx.QueryRow(query, row.key).Scan(row)
 	if err == sql.ErrNoRows {
 		return row
 	}
@@ -158,10 +156,10 @@ func (db *SqlRows) Len(tx *sqlTx) int {
 	// db.mu.RLock()
 	// defer db.mu.RUnlock()
 
-	query := "SELECT count(*) FROM rows_t WHERE parent = ? and table_id = ?"
+	query := "SELECT count(*) FROM " + db.GetTableName()
 	// stmt := db.getStatement(tx, query)
 
-	err := tx.QueryRow(query, db.parent, db.tableId).Scan(&count)
+	err := tx.QueryRow(query).Scan(&count)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -179,18 +177,22 @@ func (db *SqlRows) ReplaceOrInsert(tx *sqlTx, item Item) Item {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	query := "INSERT INTO rows_t (parent, table_id, row_key, families) values (?, ?, ?, ?)"
+	query := "INSERT INTO " + db.GetTableName() + " (row_key, families) values (?, ?)"
 	// stmt := db.getStatement(tx, query)
 
-	_, err = tx.Exec(query, db.parent, db.tableId, row.key, families)
+	_, err = tx.Exec(query, row.key, families)
 	if e, ok := err.(sqlite3.Error); ok && e.Code == 19 {
-		query := "UPDATE rows_t SET families = ? WHERE parent = ? AND table_id = ? AND row_key = ?"
+		query := "UPDATE " + db.GetTableName() + " SET families = ? WHERE row_key = ?"
 		// stmt := db.getStatement(tx, query)
 
-		_, err = tx.Exec(query, families, db.parent, db.tableId, row.key)
+		_, err = tx.Exec(query, families, row.key)
 	}
 	if err != nil {
 		log.Fatalf("row:%s err %s", row.key, err)
 	}
 	return row
+}
+
+func (db *SqlRows) GetTableName() string {
+	return fmt.Sprintf("%s", db.tableId)
 }
