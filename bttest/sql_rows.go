@@ -82,24 +82,24 @@ func (db *SqlRows) query(iterator ItemIterator, tx *sqlTx, query string, args ..
 	}
 }
 
-func (db *SqlRows) Ascend(iterator ItemIterator, tx *sqlTx) {
-	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" ORDER BY row_key ASC")
+func (db *SqlRows) Ascend(iterator ItemIterator, tx *sqlTx, limit int64) {
+	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" ORDER BY row_key ASC LIMIT ?", limit)
 }
 
-func (db *SqlRows) AscendGreaterOrEqual(pivot Item, iterator ItemIterator, tx *sqlTx) {
+func (db *SqlRows) AscendGreaterOrEqual(pivot Item, iterator ItemIterator, tx *sqlTx, limit int64) {
 	row := pivot.(*row)
-	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" WHERE row_key >= ? ORDER BY row_key ASC", row.key)
+	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" WHERE row_key >= ? ORDER BY row_key ASC LIMIT ?", row.key, limit)
 }
 
-func (db *SqlRows) AscendLessThan(pivot Item, iterator ItemIterator, tx *sqlTx) {
+func (db *SqlRows) AscendLessThan(pivot Item, iterator ItemIterator, tx *sqlTx, limit int64) {
 	row := pivot.(*row)
-	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" WHERE row_key < ? ORDER BY row_key ASC", row.key)
+	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" WHERE row_key < ? ORDER BY row_key ASC LIMIT ?", row.key, limit)
 }
 
-func (db *SqlRows) AscendRange(greaterOrEqual, lessThan Item, iterator ItemIterator, tx *sqlTx) {
+func (db *SqlRows) AscendRange(greaterOrEqual, lessThan Item, iterator ItemIterator, tx *sqlTx, limit int64) {
 	ge := greaterOrEqual.(*row)
 	lt := lessThan.(*row)
-	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" WHERE row_key >= ? and row_key < ? ORDER BY row_key ASC", ge.key, lt.key)
+	db.query(iterator, tx, "SELECT row_key, families FROM "+db.GetTableName()+" WHERE row_key >= ? and row_key < ? ORDER BY row_key ASC LIMIT ?", ge.key, lt.key, limit)
 }
 
 func (db *SqlRows) DeleteAll(tx *sqlTx) {

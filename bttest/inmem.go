@@ -344,7 +344,7 @@ func (s *server) DropRowRange(ctx context.Context, req *btapb.DropRowRangeReques
 				return true
 			}
 			return false // stop iteration
-		}, tx)
+		}, tx, 1)
 
 		for _, r := range rowsToDelete {
 			tbl.rows.Delete(tx, r)
@@ -460,6 +460,10 @@ func (s *server) ReadRows(req *btpb.ReadRowsRequest, stream btpb.Bigtable_ReadRo
 		return true
 	}
 
+	if req.RowsLimit < 1 {
+		req.RowsLimit = math.MaxInt64
+	}
+
 	tx := NewTx(tbl.rows.db)
 	defer func() {
 		err := tx.Commit()
@@ -495,18 +499,18 @@ func (s *server) ReadRows(req *btpb.ReadRowsRequest, stream btpb.Bigtable_ReadRo
 			}
 			switch {
 			case start == "" && end == "":
-				tbl.rows.Ascend(addRow, tx) // all rows
+				tbl.rows.Ascend(addRow, tx, req.RowsLimit) // all rows
 			case start == "":
-				tbl.rows.AscendLessThan(btreeKey(end), addRow, tx)
+				tbl.rows.AscendLessThan(btreeKey(end), addRow, tx, req.RowsLimit)
 			case end == "":
-				tbl.rows.AscendGreaterOrEqual(btreeKey(start), addRow, tx)
+				tbl.rows.AscendGreaterOrEqual(btreeKey(start), addRow, tx, req.RowsLimit)
 			default:
-				tbl.rows.AscendRange(btreeKey(start), btreeKey(end), addRow, tx)
+				tbl.rows.AscendRange(btreeKey(start), btreeKey(end), addRow, tx, req.RowsLimit)
 			}
 		}
 	} else {
 		// Read all rows
-		tbl.rows.Ascend(addRow, tx)
+		tbl.rows.Ascend(addRow, tx, req.RowsLimit)
 	}
 	gcRules := tbl.gcRules()
 	tbl.mu.RUnlock()
@@ -1364,7 +1368,7 @@ func (s *server) SampleRowKeys(req *btpb.SampleRowKeysRequest, stream btpb.Bigta
 		offset += int64(row.size())
 		i++
 		return true
-	}, tx)
+	}, tx, 1)
 
 	return err
 }
