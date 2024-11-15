@@ -42,7 +42,7 @@ func main() {
 		log.Fatal("missing --db-file")
 	}
 
-	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?cache=shared", *dbFile))
+	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?cache=shared&_journal_mode=WAL&_sync=NORMAL", *dbFile))
 	if err != nil {
 		log.Fatalf("failed creating sqlite3 connection %v", err)
 	}
