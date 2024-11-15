@@ -512,7 +512,7 @@ func (s *server) ReadRows(req *btpb.ReadRowsRequest, stream btpb.Bigtable_ReadRo
 		// Read all rows
 		tbl.rows.Ascend(addRow, tx, req.RowsLimit)
 	}
-	gcRules := tbl.gcRules()
+	gcRules := tbl.gcRulesNoLock()
 	tbl.mu.RUnlock()
 
 	rows := make([]*row, 0, len(rowSet))
@@ -1440,7 +1440,10 @@ func (t *table) gcRules() map[string]*btapb.GcRule {
 	// This method doesn't add or remove rows, so we only need a read lock for the table.
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+	return t.gcRulesNoLock()
+}
 
+func (t *table) gcRulesNoLock() map[string]*btapb.GcRule {
 	// Gather GC rules we'll apply.
 	rules := make(map[string]*btapb.GcRule) // keyed by "fam"
 	for fam, cf := range t.families {
