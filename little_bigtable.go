@@ -48,17 +48,17 @@ func main() {
 	}
 	db.SetMaxOpenConns(1)
 
-	log.Println("setting db journal mode to MEMORY")
-	_, err = db.Exec("PRAGMA journal_mode = MEMORY")
-	if err != nil {
-		log.Fatalf("error setting db journal_mode to MEMORY: %v", err)
-	}
+	// log.Println("setting db journal mode to MEMORY")
+	// _, err = db.Exec("PRAGMA journal_mode = MEMORY")
+	// if err != nil {
+	// 	log.Fatalf("error setting db journal_mode to MEMORY: %v", err)
+	// }
 
-	log.Println("setting db synchronous to OFF")
-	_, err = db.Exec("PRAGMA synchronous = OFF")
-	if err != nil {
-		log.Fatalf("error setting db synchronous to OFF: %v", err)
-	}
+	// log.Println("setting db synchronous to OFF")
+	// _, err = db.Exec("PRAGMA synchronous = OFF")
+	// if err != nil {
+	// 	log.Fatalf("error setting db synchronous to OFF: %v", err)
+	// }
 
 	err = bttest.CreateTables(ctx, db)
 	if err != nil {
